@@ -156,7 +156,7 @@ function commitDeletion(fiber, domParent) {
 }
 
 function render(element, container) {
-  // fiber 根节点
+  // fiber 根节点（这个就是 workInProgressTree）
   wipRoot = {
     // dom 直接设置 container，相当于生成真实 DOM
     dom: container,
@@ -164,11 +164,13 @@ function render(element, container) {
       children: [element],
     },
     // 保存当前构建好的 fiber 节点，也就是旧节点
+    // React 中会同时存在 2 棵 fiber 树，一棵是 currentFiberTree，另外一棵是 workInProgressTree
+    // 当前正在构建的树是 workInProgressTree，currentRoot 将会作为对比，查看是否可以被复用
     alternate: currentRoot,
   }
   // 删除节点
   deletions = []
-  // 下一个处理的单元
+  // 下一个处理的单元设置为 workInProgressTree 的根节点（nextUnitOfWork 将会在下次浏览器空闲的时候被处理）
   nextUnitOfWork = wipRoot
 }
 
@@ -176,9 +178,14 @@ function render(element, container) {
  * 下一个待处理的单元
  */
 let nextUnitOfWork = null
+/**
+ * currentFiberTree 的根节点
+ * 在第一次渲染的时候，currentRoot 为空
+ */
 let currentRoot = null
 /**
- * 当前 fiber 的根节点
+ * work in progress root
+ * workInProgressTree 的根节点
  */
 let wipRoot = null
 /**
@@ -208,10 +215,12 @@ function workLoop(deadLine) {
   // 等待下次浏览器空闲时机
   requestIdleCallback(workLoop)
 }
-// // 在浏览器空闲时执行 workLoop
+// 在浏览器空闲时执行 workLoop
 requestIdleCallback(workLoop)
 
+// 执行工作单元
 function performUnitOfWork(fiber) {
+  // 这里直接使用 type 是否为一个 函数来判断是否为函数式组件
   const isFunctionComponent = fiber.type instanceof Function
   if (isFunctionComponent) {
     // 处理函数式组件
@@ -242,11 +251,11 @@ let wipFiber = null
 let hookIndex = null
 // 处理函数式组件
 function updateFunctionComponent(fiber) {
-  console.log(222);
-  // 重置 wipFiber
+  // 将 wipFiber 设置为当前操作的 Fiber 节点
   wipFiber = fiber
-  // 重置当前的 HookIndex
+  // 重置当前的 HookIndex（与 hook 的使用有关系）
   hookIndex = 0
+  // 使用一个数组保存当前函数组件的 hook 的执行结果
   wipFiber.hooks = []
   // 函数式组件的 children 需要执行 type 属性
   // 获取里面的 children
@@ -266,20 +275,22 @@ function useState(initial) {
 
   const setState = action => {
     hook.queue.push(action)
+    // 重新定义 wipRoot，也是从根组件开始进行渲染
     wipRoot = {
       dom: currentRoot.dom,
       props: currentRoot.props,
       alternate: currentRoot
     }
+    // 将下一个处理的单元设置为 wipRoot
     nextUnitOfWork = wipRoot
     deletions = []
   }
 
-  // 获取堆积的 actions
+  // 获取堆积的 actions（下一次节点更新后会执行到这）
   const actions = oldHook ? oldHook.queue : []
   // 批量处理
   actions.forEach(action => {
-    // 执行的时候会把每次最新的 state 给传递出去
+    // 执行的时候会把每次最新的 state 给传递进去
     hook.state = action(hook.state)
   })
 
@@ -298,11 +309,12 @@ function updateHostComponent(fiber) {
 }
 
 /**
- * 针对 wipFiber 新建 子fiber（包括新增和更新），建立好 parent 和 sibling 的关系（这里直接把 beginWork 整合进来了）
+ * 针对 wipFiber 新建 子fiber（包括新增和更新），建立好 parent 和 sibling 的关系（beginWork 中会调用 reconcileChildren）
  * 
  * 当前 fiber 节点与子元素 fiber 节点建立连接
+ * 给 fiber 节点增加 effectTag 标记，实际上打完标记后还会装载上 effectList
  * @param {*} wipFiber 
- * @param {*} elements 
+ * @param {*} elements fiber 的 children
  */
 function reconcileChildren(wipFiber, elements) {
   let index = 0
@@ -311,13 +323,17 @@ function reconcileChildren(wipFiber, elements) {
 
   let prevSibling = null
   
-  // 新旧 fiber 进行对比
+  // 新旧 fiber 的 child 进行对比
+  // 新 fiber 的 child 未遍历完毕 或者 旧 fiber 的 child 未遍历完毕 循环都不停止
   while(
     index < elements.length ||
     oldFiber != null
   ) {
+    // 获取当前的子节点
     const element = elements[index]
     let newFiber = null
+
+    // 这里直接判断它们的 type 是否相同来判断 fiber 节点是否可以复用
     const sameType = oldFiber && element && element.type === oldFiber.type
 
     // fiber 相同进行复用
@@ -325,7 +341,7 @@ function reconcileChildren(wipFiber, elements) {
       newFiber = {
         type: oldFiber.type,
         props: element.props, // 这里依然是拿 element.props 来设置属性
-        dom: oldFiber.dom,
+        dom: oldFiber.dom, // dom 复用
         parent: wipFiber,
         alternate: oldFiber, // 保存旧的 fiber 值
         effectTag: 'UPDATE'
@@ -344,9 +360,10 @@ function reconcileChildren(wipFiber, elements) {
       }
     }
 
-    // 给 oldFiber 打标志
+    // oldFiber 存在，但是 element 不存在了，则说明被删除掉了
     if (oldFiber && !sameType) {
       oldFiber.effectTag = 'DELETION'
+      // 把删除的节点记录在 deletions 中
       deletions.push(oldFiber)
     }
 
