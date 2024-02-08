@@ -116,6 +116,7 @@ function commitWork(fiber) {
   let domParentFiber = fiber.parent
   // 这里的父 fiber 一定要保证 dom 存在，不存在的话需要一直向上找，找到具有 dom 的 fiber 节点
   // 函数式组件也算是一个 fiber 节点，但是它没有真实的 dom，所以不能被渲染出来，这里需要一直向上找到存在 dom 的真实 fiber 节点
+  // 这里的核心点就是，Fiber 节点不一定对应的是一个真实 dom。真实 dom 的层级不是和 fiber 节点层级严格一一对应的
   while(!domParentFiber.dom) {
     domParentFiber = domParentFiber.parent
   }
